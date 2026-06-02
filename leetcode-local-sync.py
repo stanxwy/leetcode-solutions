@@ -4,6 +4,7 @@ LeetCode 本地同步脚本
 自动从浏览器读取 Cookie（避免手动提取）
 支持多语言解答
 自动根据语言类型生成正确的注释格式
+文件夹命名：0001-two-sum 格式
 """
 
 import os
@@ -62,7 +63,6 @@ class LeetCodeLocalSync:
             if os.path.exists(cookie_path):
                 print(f"🔍 尝试读取: {cookie_path}")
                 try:
-                    # 复制 Cookie 文件（避免锁定）
                     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
                     temp_file.close()
                     shutil.copy2(cookie_path, temp_file.name)
@@ -122,6 +122,19 @@ class LeetCodeLocalSync:
         
         return list(latest.values())
     
+    def format_folder_name(self, submission: Dict) -> str:
+        """格式化文件夹名称：0001-two-sum（使用 question_id）"""
+        question_id = submission.get('question_id', 0)
+        title_slug = submission['title_slug']
+        
+        try:
+            problem_id = int(question_id)
+            folder_name = f"{problem_id:04d}-{title_slug}"
+        except (ValueError, TypeError):
+            folder_name = f"0000-{title_slug}"
+        
+        return folder_name
+    
     def normalize_language(self, lang: str) -> str:
         """标准化语言名称"""
         lang_map = {
@@ -160,11 +173,20 @@ class LeetCodeLocalSync:
         normalized = self.normalize_language(lang)
         return ext_map.get(normalized, f'.{normalized}')
     
-    def generate_header(self, title: str, title_slug: str, date_str: str, lang: str) -> str:
+    def generate_header(self, submission: Dict) -> str:
         """根据语言生成对应的注释头部"""
+        title = submission['title']
+        title_slug = submission['title_slug']
+        lang = submission['lang']
+        question_id = submission.get('question_id', 0)
+        timestamp = int(submission['timestamp'])
+        date_str = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d')
+        
+        # 显示带编号的标题
+        display_title = f"[{question_id:04d}] {title}" if question_id else title
         
         info_lines = [
-            f"LeetCode: {title}",
+            f"LeetCode: {display_title}",
             f"Link: https://leetcode.com/problems/{title_slug}/",
             f"Date: {date_str}",
             f"Language: {lang}",
@@ -183,7 +205,7 @@ class LeetCodeLocalSync:
         elif lang in ['ruby', 'rb']:
             return '\n'.join([f"# {line}" for line in info_lines]) + "\n\n"
         
-        # 默认（Shell, Perl 等）
+        # 默认
         else:
             return '\n'.join([f"# {line}" for line in info_lines]) + "\n\n"
     
@@ -192,8 +214,11 @@ class LeetCodeLocalSync:
         title_slug = submission['title_slug']
         lang = submission['lang']
         
-        # 创建题目目录
-        problem_dir = self.output_dir / title_slug
+        # 使用 question_id 生成文件夹名
+        folder_name = self.format_folder_name(submission)
+        
+        # 创建题目目录（使用带编号的文件夹名）
+        problem_dir = self.output_dir / folder_name
         problem_dir.mkdir(exist_ok=True)
         
         # 文件名：solution.py, solution.js, solution.java 等
@@ -206,32 +231,31 @@ class LeetCodeLocalSync:
             return False
         
         # 生成正确的注释头部
-        timestamp = int(submission['timestamp'])
-        date_str = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d')
-        header = self.generate_header(
-            submission['title'], 
-            title_slug, 
-            date_str, 
-            lang
-        )
+        header = self.generate_header(submission)
         
         # 写入文件
         filepath.write_text(header + submission['code'], encoding='utf-8')
-        print(f"✅ 新增: {title_slug}/{filename}")
+        print(f"✅ 新增: {folder_name}/{filename}")
         return True
     
     def generate_readme(self, submissions: List[Dict]) -> None:
-        """生成 README"""
+        """生成 README（按编号排序）"""
         problems = {}
         for sub in submissions:
             slug = sub['title_slug']
             lang = self.normalize_language(sub['lang'])
+            question_id = int(sub.get('question_id', 0))
+            
             if slug not in problems:
                 problems[slug] = {
+                    'id': question_id,
                     'title': sub['title'],
                     'languages': set()
                 }
             problems[slug]['languages'].add(lang)
+        
+        # 按编号排序
+        sorted_problems = sorted(problems.values(), key=lambda x: x['id'])
         
         readme = f"""# LeetCode Solutions
 
@@ -244,13 +268,15 @@ class LeetCodeLocalSync:
 
 ## 题目列表
 
-| 题目 | 语言 |
-|------|------|
+| 编号 | 题目 | 语言 |
+|------|------|------|
 """
         
-        for slug, info in sorted(problems.items()):
+        for info in sorted_problems:
+            # 找到对应的 slug
+            slug = [k for k, v in problems.items() if v['id'] == info['id']][0] if info['id'] > 0 else ''
             langs = ', '.join(sorted(info['languages']))
-            readme += f"| [{info['title']}](https://leetcode.com/problems/{slug}/) | {langs} |\n"
+            readme += f"| {info['id']:04d} | [{info['title']}](https://leetcode.com/problems/{slug}/) | {langs} |\n"
         
         readme += f"\n---\n*Powered by LeetCode Local Sync*\n"
         
