@@ -3,6 +3,7 @@
 LeetCode 本地同步脚本
 自动从浏览器读取 Cookie（避免手动提取）
 支持多语言解答
+自动根据语言类型生成正确的注释格式
 """
 
 import os
@@ -10,6 +11,8 @@ import sys
 import json
 import sqlite3
 import requests
+import tempfile
+import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -20,65 +23,71 @@ class LeetCodeLocalSync:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
         
-        # 自动从浏览器获取 Cookie
-        self.session_token, self.csrf_token = self.get_cookies_from_browser()
+        # 获取 Cookie
+        self.session_token, self.csrf_token = self.get_cookies()
         
         if not self.session_token:
-            print("❌ 无法自动获取 Cookie，请手动登录 LeetCode 后重试")
+            print("❌ 无法获取 Cookie")
+            print("   请按以下步骤操作：")
+            print("   1. 在 LeetCode 网页上登录")
+            print("   2. 按 F12 → Application → Cookies → https://leetcode.com")
+            print("   3. 复制 LEETCODE_SESSION 和 csrftoken 的值")
+            print("   4. 创建文件 ./.leetcode_cookies.json，内容：")
+            print('      {"session": "你的session值", "csrf": "你的csrf值"}')
             sys.exit(1)
     
-    def get_cookies_from_browser(self) -> tuple:
-        """从本地浏览器（Chrome/Edge）自动读取 LeetCode Cookie"""
+    def get_cookies(self) -> tuple:
+        """获取 Cookie（优先配置文件，其次浏览器）"""
+        # 方法1：从配置文件读取
+        config_path = Path.cwd() / ".leetcode_cookies.json"
+        if config_path.exists():
+            try:
+                with open(config_path, 'r') as f:
+                    cookies = json.load(f)
+                    session = cookies.get('session') or cookies.get('LEETCODE_SESSION')
+                    csrf = cookies.get('csrf') or cookies.get('csrftoken')
+                    if session and csrf:
+                        print("✅ 从配置文件读取 Cookie")
+                        return session, csrf
+            except Exception as e:
+                print(f"⚠️ 读取配置文件失败: {e}")
         
-        # Chrome/Edge 的 Cookie 数据库路径
+        # 方法2：从浏览器读取（Windows）
         cookie_paths = [
-            os.path.expanduser("~/Library/Application Support/Google/Chrome/Default/Cookies"),  # macOS Chrome
-            os.path.expanduser("~/Library/Application Support/Google/Chrome/Profile 1/Cookies"),
-            os.path.expanduser("~/AppData/Local/Google/Chrome/User Data/Default/Cookies"),  # Windows Chrome
-            os.path.expanduser("~/snap/chromium/common/chromium/Default/Cookies"),  # Linux
+            os.path.expanduser("~\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cookies"),
+            os.path.expanduser("~\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\Cookies"),
         ]
         
         for cookie_path in cookie_paths:
             if os.path.exists(cookie_path):
+                print(f"🔍 尝试读取: {cookie_path}")
                 try:
                     # 复制 Cookie 文件（避免锁定）
-                    import tempfile, shutil
-                    temp_cookie = tempfile.NamedTemporaryFile(delete=False)
-                    shutil.copy2(cookie_path, temp_cookie.name)
+                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
+                    temp_file.close()
+                    shutil.copy2(cookie_path, temp_file.name)
                     
-                    # 连接 SQLite 数据库
-                    conn = sqlite3.connect(temp_cookie.name)
+                    conn = sqlite3.connect(temp_file.name)
                     cursor = conn.cursor()
                     
-                    # 查询 LEETCODE_SESSION
                     cursor.execute(
                         "SELECT value FROM cookies WHERE host_key LIKE '%leetcode.com%' AND name='LEETCODE_SESSION'"
                     )
                     session_row = cursor.fetchone()
                     
-                    # 查询 csrftoken
                     cursor.execute(
                         "SELECT value FROM cookies WHERE host_key LIKE '%leetcode.com%' AND name='csrftoken'"
                     )
                     csrf_row = cursor.fetchone()
                     
                     conn.close()
-                    os.unlink(temp_cookie.name)
+                    os.unlink(temp_file.name)
                     
                     if session_row and csrf_row:
-                        print("✅ 成功从浏览器读取 Cookie")
+                        print("✅ 从浏览器读取 Cookie")
                         return session_row[0], csrf_row[0]
-                        
                 except Exception as e:
-                    print(f"⚠️ 读取 Cookie 失败: {e}")
-                    continue
-        
-        # 如果自动读取失败，尝试从配置文件读取
-        config_path = Path.home() / ".leetcode_cookies.json"
-        if config_path.exists():
-            with open(config_path) as f:
-                cookies = json.load(f)
-                return cookies.get('session'), cookies.get('csrf')
+                    print(f"⚠️ 读取失败: {e}")
         
         return None, None
     
@@ -151,11 +160,37 @@ class LeetCodeLocalSync:
         normalized = self.normalize_language(lang)
         return ext_map.get(normalized, f'.{normalized}')
     
+    def generate_header(self, title: str, title_slug: str, date_str: str, lang: str) -> str:
+        """根据语言生成对应的注释头部"""
+        
+        info_lines = [
+            f"LeetCode: {title}",
+            f"Link: https://leetcode.com/problems/{title_slug}/",
+            f"Date: {date_str}",
+            f"Language: {lang}",
+            "Status: Accepted"
+        ]
+        
+        # Python
+        if lang in ['python', 'python3', 'py']:
+            return '"""\n' + '\n'.join(info_lines) + '\n"""\n\n'
+        
+        # JavaScript / TypeScript / Java / C / C++ / C# / Go / Rust / Swift / Kotlin
+        elif lang in ['javascript', 'js', 'typescript', 'ts', 'java', 'cpp', 'c', 'csharp', 'cs', 'go', 'rust', 'rs', 'swift', 'kotlin', 'kt']:
+            return '/**\n * ' + '\n * '.join(info_lines) + '\n */\n\n'
+        
+        # Ruby
+        elif lang in ['ruby', 'rb']:
+            return '\n'.join([f"# {line}" for line in info_lines]) + "\n\n"
+        
+        # 默认（Shell, Perl 等）
+        else:
+            return '\n'.join([f"# {line}" for line in info_lines]) + "\n\n"
+    
     def save_solution(self, submission: Dict) -> bool:
         """保存解答，返回是否保存了新文件"""
         title_slug = submission['title_slug']
         lang = submission['lang']
-        lang_normalized = self.normalize_language(lang)
         
         # 创建题目目录
         problem_dir = self.output_dir / title_slug
@@ -170,17 +205,15 @@ class LeetCodeLocalSync:
         if filepath.exists():
             return False
         
-        # 添加元数据头部
+        # 生成正确的注释头部
         timestamp = int(submission['timestamp'])
-        header = f'''"""
-LeetCode: {submission['title']}
-Link: https://leetcode.com/problems/{title_slug}/
-Date: {datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d')}
-Language: {lang}
-Status: Accepted
-"""
-
-'''
+        date_str = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d')
+        header = self.generate_header(
+            submission['title'], 
+            title_slug, 
+            date_str, 
+            lang
+        )
         
         # 写入文件
         filepath.write_text(header + submission['code'], encoding='utf-8')
@@ -263,7 +296,6 @@ Status: Accepted
             return
         
         print(f"📊 找到 {len(submissions)} 个通过记录（去重后）")
-        return
         
         new_count = 0
         for sub in submissions:
@@ -272,7 +304,7 @@ Status: Accepted
         
         if new_count > 0:
             self.generate_readme(submissions)
-            self.git_commit_and_push()
+            #self.git_commit_and_push()
             print(f"✨ 同步完成！新增 {new_count} 个解答")
         else:
             print("📭 没有新解答需要同步")
