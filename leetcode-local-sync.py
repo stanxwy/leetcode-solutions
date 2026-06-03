@@ -330,7 +330,7 @@ class LeetCodeLocalSync:
         
         if new_count > 0:
             self.generate_readme(submissions)
-            #self.git_commit_and_push()
+            self.git_commit_and_push()
             print(f"✨ 同步完成！新增 {new_count} 个解答")
         else:
             print("📭 没有新解答需要同步")
