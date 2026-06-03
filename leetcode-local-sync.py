@@ -5,6 +5,7 @@ LeetCode 本地同步脚本
 支持多语言解答
 自动根据语言类型生成正确的注释格式
 文件夹命名：0001-two-sum 格式
+支持更新已存在的解法（如果 LeetCode 上有更新的提交）
 """
 
 import os
@@ -15,14 +16,15 @@ import tempfile
 import shutil
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import subprocess
 from dotenv import load_dotenv
 
 class LeetCodeLocalSync:
-    def __init__(self, output_dir: str = "solutions"):
-        self.output_dir = Path(output_dir)
+    def __init__(self, keep_versions: bool = False):
+        self.output_dir = Path("solutions")
         self.output_dir.mkdir(exist_ok=True)
+        self.keep_versions = keep_versions  # 是否保留旧版本
         
         # 获取 Cookie
         self.session_token, self.csrf_token = self.get_cookies()
@@ -33,26 +35,25 @@ class LeetCodeLocalSync:
             print("   1. 在 LeetCode 网页上登录")
             print("   2. 按 F12 → Application → Cookies → https://leetcode.com")
             print("   3. 复制 LEETCODE_SESSION 和 csrftoken 的值")
-            print("   4. 创建文件 ./.leetcode_cookies.json，内容：")
-            print('      {"session": "你的session值", "csrf": "你的csrf值"}')
+            print("   4. 创建文件 .env，内容：")
+            print('      LEETCODE_SESSION=你的session值')
+            print('      LEETCODE_CSRF_TOKEN=你的csrf值')
             sys.exit(1)
     
     def get_cookies(self) -> tuple:
-        """获取 Cookie（优先配置文件，其次浏览器）"""
-        # 方法1：从配置文件读取
-        
-        config_path = Path.cwd() / ".env"
-        if config_path.exists():
+        """获取 Cookie（优先 .env，其次浏览器）"""
+        # 方法1：从 .env 文件读取
+        env_path = Path.cwd() / ".env"
+        if env_path.exists():
             try:
-                with open(config_path, 'r') as f:
-                    load_dotenv()  # 加载 .env 文件
-                    session = os.getenv('LEETCODE_SESSION')
-                    csrf = os.getenv('LEETCODE_CSRF_TOKEN')
-                    if session and csrf:
-                        print("✅ 从配置文件读取 Cookie")
-                        return session, csrf
+                load_dotenv(env_path)
+                session = os.getenv('LEETCODE_SESSION')
+                csrf = os.getenv('LEETCODE_CSRF_TOKEN')
+                if session and csrf:
+                    print("✅ 从 .env 文件读取 Cookie")
+                    return session, csrf
             except Exception as e:
-                print(f"⚠️ 读取配置文件失败: {e}")
+                print(f"⚠️ 读取 .env 失败: {e}")
         
         # 方法2：从浏览器读取（Windows）
         cookie_paths = [
@@ -92,7 +93,7 @@ class LeetCodeLocalSync:
         
         return None, None
     
-    def fetch_submissions(self, limit: int = 50) -> List[Dict]:
+    def fetch_submissions(self, limit: int = 100) -> List[Dict]:
         """获取最近的通过记录"""
         headers = {
             'Cookie': f'LEETCODE_SESSION={self.session_token}; csrftoken={self.csrf_token}',
@@ -210,34 +211,88 @@ class LeetCodeLocalSync:
         else:
             return '\n'.join([f"# {line}" for line in info_lines]) + "\n\n"
     
-    def save_solution(self, submission: Dict) -> bool:
-        """保存解答，返回是否保存了新文件"""
+    def get_local_timestamp(self, filepath: Path) -> Optional[int]:
+        """从本地文件头部提取时间戳（如果存在）"""
+        if not filepath.exists():
+            return None
+        
+        try:
+            content = filepath.read_text(encoding='utf-8')
+            # 查找 Date: 行
+            for line in content.split('\n'):
+                if line.strip().startswith('Date:'):
+                    date_str = line.split('Date:')[-1].strip()
+                    # 解析日期格式 YYYY-MM-DD
+                    try:
+                        dt = datetime.strptime(date_str, '%Y-%m-%d')
+                        return int(dt.timestamp())
+                    except:
+                        return None
+        except Exception:
+            pass
+        return None
+    
+    def backup_old_version(self, filepath: Path) -> None:
+        """备份旧版本"""
+        if not self.keep_versions or not filepath.exists():
+            return
+        
+        # 生成版本号
+        version = 1
+        while True:
+            backup_path = filepath.with_name(f"{filepath.stem}_v{version}{filepath.suffix}")
+            if not backup_path.exists():
+                shutil.copy2(filepath, backup_path)
+                print(f"   📦 备份旧版本: {backup_path.name}")
+                break
+            version += 1
+    
+    def save_solution(self, submission: Dict) -> Tuple[bool, bool]:
+        """
+        保存解答
+        返回: (是否有变化, 是否为新文件)
+        - (True, True): 新增文件
+        - (True, False): 更新了已有文件
+        - (False, False): 文件已存在且是最新，无需更新
+        """
         title_slug = submission['title_slug']
         lang = submission['lang']
         
         # 使用 question_id 生成文件夹名
         folder_name = self.format_folder_name(submission)
         
-        # 创建题目目录（使用带编号的文件夹名）
+        # 创建题目目录
         problem_dir = self.output_dir / folder_name
         problem_dir.mkdir(exist_ok=True)
         
-        # 文件名：solution.py, solution.js, solution.java 等
+        # 目标文件路径
         ext = self.get_file_extension(lang)
         filename = f'solution{ext}'
         filepath = problem_dir / filename
         
-        # 如果文件已存在，跳过
+        # 远程提交的时间戳
+        remote_timestamp = int(submission['timestamp'])
+        
+        # 检查本地是否存在
         if filepath.exists():
-            return False
+            local_timestamp = self.get_local_timestamp(filepath)
+            
+            # 如果本地文件存在且时间戳不旧于远程，则跳过
+            if local_timestamp and local_timestamp >= remote_timestamp:
+                return False, False
+            
+            # 需要更新：备份旧版本
+            self.backup_old_version(filepath)
+            action = "🔄 更新"
+        else:
+            action = "✅ 新增"
         
-        # 生成正确的注释头部
+        # 生成注释头部并写入文件
         header = self.generate_header(submission)
-        
-        # 写入文件
         filepath.write_text(header + submission['code'], encoding='utf-8')
-        print(f"✅ 新增: {folder_name}/{filename}")
-        return True
+        
+        print(f"{action}: {folder_name}/{filename}")
+        return True, not filepath.exists()  # 如果是新文件则 is_new=True
     
     def generate_readme(self, submissions: List[Dict]) -> None:
         """生成 README（按编号排序）"""
@@ -251,9 +306,15 @@ class LeetCodeLocalSync:
                 problems[slug] = {
                     'id': question_id,
                     'title': sub['title'],
-                    'languages': set()
+                    'languages': set(),
+                    'last_updated': int(sub['timestamp'])
                 }
             problems[slug]['languages'].add(lang)
+            # 更新时间戳为最新
+            problems[slug]['last_updated'] = max(
+                problems[slug]['last_updated'], 
+                int(sub['timestamp'])
+            )
         
         # 按编号排序
         sorted_problems = sorted(problems.values(), key=lambda x: x['id'])
@@ -269,15 +330,16 @@ class LeetCodeLocalSync:
 
 ## 题目列表
 
-| 编号 | 题目 | 语言 |
-|------|------|------|
+| 编号 | 题目 | 语言 | 最后更新 |
+|------|------|------|----------|
 """
         
         for info in sorted_problems:
             # 找到对应的 slug
             slug = [k for k, v in problems.items() if v['id'] == info['id']][0] if info['id'] > 0 else ''
             langs = ', '.join(sorted(info['languages']))
-            readme += f"| {info['id']:04d} | [{info['title']}](https://leetcode.com/problems/{slug}/) | {langs} |\n"
+            last_updated = datetime.fromtimestamp(info['last_updated']).strftime('%Y-%m-%d')
+            readme += f"| {info['id']:04d} | [{info['title']}](https://leetcode.com/problems/{slug}/) | {langs} | {last_updated} |\n"
         
         readme += f"\n---\n*Powered by LeetCode Local Sync*\n"
         
@@ -325,17 +387,29 @@ class LeetCodeLocalSync:
         print(f"📊 找到 {len(submissions)} 个通过记录（去重后）")
         
         new_count = 0
-        for sub in submissions:
-            if self.save_solution(sub):
-                new_count += 1
+        update_count = 0
         
-        if new_count > 0:
+        for sub in submissions:
+            changed, is_new = self.save_solution(sub)
+            if changed:
+                if is_new:
+                    new_count += 1
+                else:
+                    update_count += 1
+        
+        if new_count > 0 or update_count > 0:
             self.generate_readme(submissions)
             self.git_commit_and_push()
-            print(f"✨ 同步完成！新增 {new_count} 个解答")
+            print(f"✨ 同步完成！新增 {new_count} 个，更新 {update_count} 个")
         else:
-            print("📭 没有新解答需要同步")
+            print("📭 没有新解答需要同步，所有文件已是最新")
 
 if __name__ == '__main__':
-    syncer = LeetCodeLocalSync()
+    import argparse
+    parser = argparse.ArgumentParser(description='LeetCode 本地同步脚本')
+    parser.add_argument('--keep-versions', action='store_true', 
+                        help='保留旧版本（备份为 solution_v1.py, solution_v2.py 等）')
+    args = parser.parse_args()
+    
+    syncer = LeetCodeLocalSync(keep_versions=args.keep_versions)
     syncer.run()
