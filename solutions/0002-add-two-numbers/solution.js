@@ -1,7 +1,7 @@
 /**
  * LeetCode: [0002] Add Two Numbers
  * Link: https://leetcode.com/problems/add-two-numbers/
- * Date: 2026-06-02
+ * Date: 2026-06-03
  * Language: javascript
  * Status: Accepted
  */
@@ -19,15 +19,15 @@
  * @return {ListNode}
  */
 var addTwoNumbers = function(l1, l2) {
-    n1 = l1;
-    n2 = l2;
-    curr = null;
-    l3 = null;
-    addOne = false;
+    let n1 = l1;
+    let n2 = l2;
+    let curr = null;
+    let l3 = null;
+    let addOne = false;
     do {
-        v1 = n1 ? n1.val : 0;
-        v2 = n2 ? n2.val : 0;
-        v3 = v1 + v2 + (addOne ? 1 : 0);
+        let v1 = n1 ? n1.val : 0;
+        let v2 = n2 ? n2.val : 0;
+        let v3 = v1 + v2 + (addOne ? 1 : 0);
         if (v3 >= 10) {
             v3 = v3 % 10;
             addOne = true;
@@ -35,7 +35,7 @@ var addTwoNumbers = function(l1, l2) {
         
         n1 = n1 ? n1.next: null;
         n2 = n2 ? n2.next : null;
-        n3 = new ListNode(v3, null);
+        let n3 = new ListNode(v3, null);
 
         if (!curr) {
             curr = n3;

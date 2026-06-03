@@ -1,1 +1,11 @@
+# 环境变量文件
 .env
+.env.local
+.env.*.local
+
+# 配置文件（如果包含敏感信息）
+secrets.json
+*.key
+*.pem
+
+*test*

@@ -41,7 +41,7 @@ class LeetCodeLocalSync:
         """获取 Cookie（优先配置文件，其次浏览器）"""
         # 方法1：从配置文件读取
         
-        config_path = Path.cwd() / ".leetcode_cookies.json"
+        config_path = Path.cwd() / ".env"
         if config_path.exists():
             try:
                 with open(config_path, 'r') as f:
