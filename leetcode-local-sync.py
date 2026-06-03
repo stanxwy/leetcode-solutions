@@ -9,7 +9,6 @@ LeetCode 本地同步脚本
 
 import os
 import sys
-import json
 import sqlite3
 import requests
 import tempfile
@@ -18,6 +17,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional
 import subprocess
+from dotenv import load_dotenv
 
 class LeetCodeLocalSync:
     def __init__(self, output_dir: str = "solutions"):
@@ -40,13 +40,14 @@ class LeetCodeLocalSync:
     def get_cookies(self) -> tuple:
         """获取 Cookie（优先配置文件，其次浏览器）"""
         # 方法1：从配置文件读取
+        
         config_path = Path.cwd() / ".leetcode_cookies.json"
         if config_path.exists():
             try:
                 with open(config_path, 'r') as f:
-                    cookies = json.load(f)
-                    session = cookies.get('session') or cookies.get('LEETCODE_SESSION')
-                    csrf = cookies.get('csrf') or cookies.get('csrftoken')
+                    load_dotenv()  # 加载 .env 文件
+                    session = os.getenv('LEETCODE_SESSION')
+                    csrf = os.getenv('LEETCODE_CSRF_TOKEN')
                     if session and csrf:
                         print("✅ 从配置文件读取 Cookie")
                         return session, csrf
